@@ -1,29 +1,31 @@
-export type ServiceType = 'Spotify' | 'Netflix';
-export type PaymentStatusType = 'paid' | 'pending' | 'unpaid';
-
 export interface Member {
   id: string;
   name: string;
-  avatar?: string;
+  avatar_initials: string;
 }
 
 export interface Service {
   id: string;
-  name: ServiceType;
+  name: string;
   totalCost: number;
-  fixedPrice?: number; // <--- ADDED THIS
+  fixedPrice: number;
   maxSlots: number;
   billingDay: number;
-  members: Member[];
+  members: {
+    id: string;
+    name: string;
+    avatar: string;
+  }[];
 }
 
 export interface PaymentStatus {
-  id?: string; // <--- ADDED THIS (Need ID to update specific rows)
+  id: string;
   memberId: string;
   serviceId: string;
   amountDue: number;
   isPaid: boolean;
-  status: PaymentStatusType; // <--- ADDED THIS
-  paidDate?: string;
-  method?: 'GCash' | 'Cash' | 'Bank';
+  status: 'paid' | 'unpaid' | 'pending';
+  paidDate?: string | null;
+  periodDate?: string; // Fixed: Added this field
+  method?: string;
 }

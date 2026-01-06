@@ -1,6 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { addMonths, format, isAfter, setDate, startOfDay } from "date-fns";
+import { addMonths, format, isAfter, setDate } from "date-fns";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -10,47 +10,50 @@ export const formatPeso = (amount: number) => {
   return new Intl.NumberFormat('en-PH', {
     style: 'currency',
     currency: 'PHP',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(amount);
 };
 
-// --- NEW LOGIC START ---
+// --- BILLING LOGIC ---
 
 export interface BillingCycle {
   start: Date;
   end: Date;
+  dueDate: Date;
   isOverdue: boolean;
-  label: string; // "Jan 9 - Feb 9"
+  label: string;
 }
 
-export function getBillingCycle(billingDay: number): BillingCycle {
-  const today = startOfDay(new Date());
-  const currentMonthCycleStart = setDate(today, billingDay);
-  
-  let start: Date;
-  
-  // If today is BEFORE the billing day (e.g., Today Jan 5, Billing Jan 9),
-  // then we are technically in the "Dec 9 - Jan 9" cycle.
-  // BUT, usually you want to see the UPCOMING payment if it's close.
-  // Let's stick to: "What is the cycle that covers TODAY?"
-  
-  if (today.getDate() < billingDay) {
-    // We are in the previous month's cycle
-    start = setDate(addMonths(today, -1), billingDay);
-  } else {
-    // We are in the current month's cycle
-    start = currentMonthCycleStart;
-  }
+// Fixed start date: December 2025
+const START_DATE = new Date(2025, 11, 1); // Month is 0-indexed (11 = Dec)
 
-  const end = addMonths(start, 1);
+export function getMonthOptions() {
+  const options = [];
+  // Generate options for 12 months starting from Dec 2025
+  for (let i = 0; i < 12; i++) {
+    const date = addMonths(START_DATE, i);
+    options.push({
+      value: format(date, "yyyy-MM-dd"),
+      label: `${format(date, "MMM")} - ${format(addMonths(date, 1), "MMM yyyy")}` 
+    });
+  }
+  return options;
+}
+
+export function getBillingCycle(billingDay: number, referenceDateStr: string): BillingCycle {
+  const selectedMonthStart = new Date(referenceDateStr);
   
-  // Overdue logic: If we are past the start date + grace period (e.g. 1 day), it's overdue
-  const isOverdue = isAfter(today, start);
+  const start = setDate(selectedMonthStart, billingDay);
+  const end = addMonths(start, 1);
+  const dueDate = start; 
+  const isOverdue = isAfter(new Date(), dueDate);
 
   return {
     start,
     end,
+    dueDate,
     isOverdue,
     label: `${format(start, "MMM d")} - ${format(end, "MMM d")}`
   };
 }
-// --- NEW LOGIC END ---

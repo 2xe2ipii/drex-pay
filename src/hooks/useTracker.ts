@@ -1,22 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import type { Service, PaymentStatus } from "../types";
-import { startOfMonth, format } from "date-fns";
 
 export function useTracker() {
   const [services, setServices] = useState<Service[]>([]);
-  const [payments, setPayments] = useState<PaymentStatus[]>([]);
+  const [allPayments, setAllPayments] = useState<PaymentStatus[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // We are currently using "2026-01-01" style logic for "current period"
-  // Even though your billing cycle is dynamic (Jan 9 - Feb 9), for database storage 
-  // we still tag payments to a specific "Billing Month Start" so we don't get duplicates.
-  const currentPeriod = format(startOfMonth(new Date()), "yyyy-MM-dd");
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
 
+      // 1. Fetch Services & Members
       const { data: servicesData, error: servicesError } = await supabase
         .from("services")
         .select(`
@@ -32,7 +27,7 @@ export function useTracker() {
         id: s.id,
         name: s.name,
         totalCost: s.total_cost,
-        fixedPrice: s.fixed_price, // <--- Mapping the new column
+        fixedPrice: s.fixed_price,
         maxSlots: s.max_slots,
         billingDay: s.billing_day,
         members: s.subscriptions.map((sub: any) => ({
@@ -44,47 +39,67 @@ export function useTracker() {
 
       setServices(formattedServices);
 
+      // 2. Fetch ALL Payments (for global analytics)
       const { data: paymentsData, error: paymentsError } = await supabase
         .from("payments")
         .select("*")
-        .eq("period_date", currentPeriod);
+        .order('paid_at', { ascending: false }); // Latest first for history
 
       if (paymentsError) throw paymentsError;
 
       const formattedPayments: PaymentStatus[] = paymentsData.map((p: any) => ({
-        id: p.id, // <--- Mapping the ID
+        id: p.id,
         memberId: p.member_id,
         serviceId: p.service_id,
         amountDue: p.amount,
         isPaid: p.is_paid,
-        status: p.status || (p.is_paid ? 'paid' : 'unpaid'), // <--- Mapping the status
+        status: p.status || (p.is_paid ? 'paid' : 'unpaid'),
         paidDate: p.paid_at,
+        periodDate: p.period_date, // Important for filtering later
         method: p.method
       }));
 
-      setPayments(formattedPayments);
+      setAllPayments(formattedPayments);
 
     } catch (error) {
-      console.error("Error fetching tracker data:", error);
+      console.error("Error fetching data:", error);
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  // --- Member Management ---
+  const addMember = async (name: string, serviceId: string) => {
+    // 1. Create Member
+    const { data: member, error: mError } = await supabase
+      .from('members')
+      .insert({ name, avatar_initials: name.substring(0, 2).toUpperCase() })
+      .select()
+      .single();
+      
+    if (mError) throw mError;
+
+    // 2. Subscribe to Service
+    const { error: sError } = await supabase
+      .from('subscriptions')
+      .insert({ member_id: member.id, service_id: serviceId });
+
+    if (sError) throw sError;
+    
+    fetchData();
+  };
+
+  const removeMember = async (memberId: string) => {
+    // Cascade delete handles subscriptions usually, but let's be safe
+    await supabase.from('members').delete().eq('id', memberId);
+    fetchData();
   };
 
   useEffect(() => {
     fetchData();
-    
-    const subscription = supabase
-      .channel('public:payments')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => {
-        fetchData();
-      })
-      .subscribe();
+    const sub = supabase.channel('any').on('postgres_changes', { event: '*', schema: 'public' }, fetchData).subscribe();
+    return () => { supabase.removeChannel(sub); };
+  }, [fetchData]);
 
-    return () => {
-      supabase.removeChannel(subscription);
-    };
-  }, []);
-
-  return { services, payments, loading, refresh: fetchData, currentPeriod };
+  return { services, allPayments, loading, refresh: fetchData, addMember, removeMember };
 }
