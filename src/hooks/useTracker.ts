@@ -8,14 +8,15 @@ export function useTracker() {
   const [payments, setPayments] = useState<PaymentStatus[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Helper to get current month's identifier (e.g., "2026-01-01")
+  // We are currently using "2026-01-01" style logic for "current period"
+  // Even though your billing cycle is dynamic (Jan 9 - Feb 9), for database storage 
+  // we still tag payments to a specific "Billing Month Start" so we don't get duplicates.
   const currentPeriod = format(startOfMonth(new Date()), "yyyy-MM-dd");
 
   const fetchData = async () => {
     try {
       setLoading(true);
 
-      // 1. Fetch Services & Subscriptions (Who is in what service?)
       const { data: servicesData, error: servicesError } = await supabase
         .from("services")
         .select(`
@@ -27,14 +28,13 @@ export function useTracker() {
 
       if (servicesError) throw servicesError;
 
-      // 2. Transform Supabase data to our Types
       const formattedServices: Service[] = servicesData.map((s: any) => ({
         id: s.id,
         name: s.name,
         totalCost: s.total_cost,
+        fixedPrice: s.fixed_price, // <--- Mapping the new column
         maxSlots: s.max_slots,
         billingDay: s.billing_day,
-        // Flatten the nested subscription data
         members: s.subscriptions.map((sub: any) => ({
           id: sub.member.id,
           name: sub.member.name,
@@ -44,7 +44,6 @@ export function useTracker() {
 
       setServices(formattedServices);
 
-      // 3. Fetch Payments for THIS month
       const { data: paymentsData, error: paymentsError } = await supabase
         .from("payments")
         .select("*")
@@ -52,12 +51,13 @@ export function useTracker() {
 
       if (paymentsError) throw paymentsError;
 
-      // 4. Map payments to our type
       const formattedPayments: PaymentStatus[] = paymentsData.map((p: any) => ({
+        id: p.id, // <--- Mapping the ID
         memberId: p.member_id,
         serviceId: p.service_id,
         amountDue: p.amount,
         isPaid: p.is_paid,
+        status: p.status || (p.is_paid ? 'paid' : 'unpaid'), // <--- Mapping the status
         paidDate: p.paid_at,
         method: p.method
       }));
@@ -71,15 +71,13 @@ export function useTracker() {
     }
   };
 
-  // Initial Fetch
   useEffect(() => {
     fetchData();
     
-    // Optional: Realtime subscription to payment updates
     const subscription = supabase
       .channel('public:payments')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => {
-        fetchData(); // Refresh data on change
+        fetchData();
       })
       .subscribe();
 
